@@ -1,0 +1,899 @@
+ public R switchingProcess(DetectionFlowDto detectionFlow) {
+
+        String image = detectionFlow.getImage();
+        if (image == null || image.equals("")) {
+            image = detectionFlow.getOriginalImage();
+        }
+        String orderId = detectionFlow.getOrderId();
+        Integer specificationId = detectionFlow.getSpecificationId();
+        Integer templateId = detectionFlow.getTemplateId();
+        Integer sign = detectionFlow.getSign();
+        String detail = detectionFlow.getDetail();
+        boolean processFlag = detectionFlow.getProcessFlag() != null ? detectionFlow.getProcessFlag() : false;
+        String processImagePath = detectionFlow.getProcessImagePath();
+
+
+        SPhotoInfoEntity photoInfoEntity = sPhotoInfoService.listOrderId(orderId);
+        TbPhotoSpecificationsEntity photoSpecifications = tbPhotoSpecificationsMapper.selectById(specificationId);
+
+        Date now = new Date();
+        photoInfoEntity.setFlag(4);
+        Integer photoId = photoInfoEntity.getId();
+//        String orderId = photoInfoEntity.getOrderId();
+//        Integer specificationId = photoInfoEntity.getSpecificationId();
+        Integer fltdataId = photoInfoEntity.getFltdata();
+        String acquisitionSoftware = photoInfoEntity.getAcquisitionSoftware();
+        Integer userId = photoInfoEntity.getUserId();
+        Integer specialInspectionFlag = photoInfoEntity.getSpecialInspectionFlag();
+        String sppecialInspectionDetai = photoInfoEntity.getSpecialInspectionDetail();
+        Integer specificationType = photoSpecifications.getType();
+        String conversionFlt = photoSpecifications.getConversionFlt();
+        String idCard = photoInfoEntity.getIdCard();
+        String uploadSign = photoInfoEntity.getUploadSign();
+        String infoName = photoInfoEntity.getInfoName();
+        Integer census = photoInfoEntity.getCensus();
+        String certificateSite = photoInfoEntity.getCertificateSite();
+        String uploadUserName = photoInfoEntity.getUploadUserName();
+        Integer cardType = photoInfoEntity.getCardType();
+        String cardTypeName = "";
+        if (cardType != null) {
+            //身份证类型
+            TbIdentityTypeEntity identityTypeEntity = identityTypeService.selectById(cardType);
+            if (identityTypeEntity != null) {
+                cardTypeName = identityTypeEntity.getName();
+            }
+        }
+        String specificationTypeName = "";
+        Integer specificationTypeId = photoSpecifications.getType();
+        if (specificationTypeId != null) {
+            //照片规格类型
+            TbPhotoSpecificationsTypeEntity tbPhotoSpecificationsTypeEntity = photoSpecificationsTypeService.selectById(specificationTypeId);
+            if (tbPhotoSpecificationsTypeEntity != null) {
+                specificationTypeName = tbPhotoSpecificationsTypeEntity.getName();
+            }
+        }
+        String censusProvince = photoInfoEntity.getCensusProvince();
+        String censusCity = photoInfoEntity.getCensusCity();
+        String censusArea = photoInfoEntity.getCensusArea();
+        String mobile = photoInfoEntity.getMobile();
+        String certificateType = photoInfoEntity.getCertificateType();
+
+
+        if (StringUtils.isNotBlank(idCard)) {
+            try {
+                CryptoUtils cu = new CryptoUtils(DefaultValueUtils.CRYPTO_KEY);
+                idCard = cu.decrypt(idCard);
+            } catch (Exception e) {
+                log.error("身份证错误，解密失败！！！idCard=" + idCard + "   key" + DefaultValueUtils.CRYPTO_KEY);
+                e.printStackTrace();
+                return R.error("身份证错误");
+            }
+        }
+        String upTime = photoInfoEntity.getUpTime() != null ? DateUtils.format(photoInfoEntity.getUpTime(), "yyyy-MM-dd HH:mm:ss") : null;
+        String photoUrl = photoInfoEntity.getPhoto();
+        // 上传照片类型 0未处理原图 1已处理原图
+        Integer uploadPhotoType = photoInfoEntity.getUploadPhotoType();
+        // 省级去向
+        Integer thirdPartyDestination = photoSpecifications.getThirdPartyDestination();
+
+
+        if (StringUtils.isNotBlank(photoUrl)) {
+            if (photoUrl.startsWith("http")) {
+                photoUrl = photoAdjUrl + photoUrl.substring(photoUrl.lastIndexOf("/image"));
+            }
+        }
+
+        if (specificationId == null) {
+            if (templateId == null) {
+                sPhotoInfoService.deleteById(photoInfoEntity.getId());
+            }
+            return R.error("参数错误");
+        }
+        /***************** 数据处理 开始 *******************/
+        // 用户类型
+        Integer userType = 0;
+        // 单位id
+        Integer companyId;
+        // flt
+        String fltData = null;
+        // 是否活体检测
+        boolean faceLiveCheck;
+        // flt名字
+        String fltName = null;
+        // 规格文件名
+        String fileName = null;
+        // cfd
+        String cfd = null;
+        // 是否深度褪第
+        Integer cleanBgFlag = null;
+
+        /**
+         * 获取用户信息
+         */
+        UserBean userBean = new UserBean();
+        userBean.setUserId(userId);
+        R userR = userClient.getUserByParam(userBean);
+        if (!"200".equals(userR.get("code").toString())) {
+            return R.error("获取用户信息失败");
+        }
+        JSONObject json = new JSONObject(userR);
+        String userStr = json.optString("user");
+        if (StringUtils.isBlank(userStr)) {
+            if (templateId == null) {
+                sPhotoInfoService.deleteById(photoInfoEntity.getId());
+            }
+            return R.error("用户不存在");
+        }
+        Gson gson = new GsonBuilder().setDateFormat("yyyy-MM-dd HH:mm:ss").create();
+        UserVo user = gson.fromJson(userStr, UserVo.class);
+        if (user == null) {
+            if (templateId == null) {
+                sPhotoInfoService.deleteById(photoInfoEntity.getId());
+            }
+            return R.error("用户不存在");
+        }
+        userType = user.getUserType();
+        companyId = user.getCompanyId();
+
+        /**
+         * 获取flt
+         */
+        TbFltdataEntity fltdataEntity = fltdataService.selectById(fltdataId);
+        if (fltdataEntity == null || fltdataEntity.getBvalue() == null || fltdataEntity.getBvalue().length <= 0) {
+            if (templateId == null) {
+                sPhotoInfoService.deleteById(photoInfoEntity.getId());
+            }
+            return R.error("规格不存在");
+        }
+        fltData = Base64.getEncoder().encodeToString(fltdataEntity.getBvalue());
+        faceLiveCheck = fltdataEntity.getFaceLiveCheck() != null && fltdataEntity.getFaceLiveCheck() == 1 ? true : false;
+        fltName = fltdataEntity.getExtCropfile();
+        fileName = fltdataEntity.getFileName();
+        if (fltdataEntity.getCfd() != null && fltdataEntity.getCfd().length > 0) {
+            cfd = Base64.getEncoder().encodeToString(fltdataEntity.getCfd());
+        }
+        String crd3rName = null;
+        String crd4rName = null;
+        if (StringUtils.isNotBlank(fileName)) {
+            try {
+                JSONObject fileNameJson = new JSONObject(fileName);
+                crd3rName = fileNameJson.optString("crd3r");
+                crd4rName = fileNameJson.optString("crd4r");
+                if (userType != null && userType == 2) { // 摄影亭用摄影亭的冲印模板
+                    crd3rName = fileNameJson.optString("crd3rPhotoBooth");
+                    crd4rName = fileNameJson.optString("crd4rPhotoBooth");
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+
+        /**
+         * 获取是否深度褪第
+         */
+        Integer app = 1;
+        List<String> paramskey = AlgorithmUtils.keyToValue(acquisitionSoftware);
+        if (!CollectionUtils.isEmpty(paramskey)) {
+            R paramR = uploadClient.getValueByKey(paramskey);
+            if ("200".equals(paramR.get("code").toString())) {
+                JSONObject js = new JSONObject(paramR);
+                String data = js.optString("data");
+                Map jsons = (Map) com.alibaba.fastjson.JSONObject.parse(data);
+                if (jsons != null && !jsons.isEmpty()) {
+                    for (Object map : jsons.entrySet()) {
+                        String value = (String) ((Map.Entry) map).getValue();
+                        app = Integer.parseInt(value);
+                    }
+                }
+            }
+        }
+        cleanBgFlag = AlgorithmUtils.value(app);
+        /***************** 数据处理 结束 *******************/
+
+
+        /***************** 获取流程 开始 *******************/
+//        Integer templateId = null;
+        if (templateId == null) {
+            // 检测流程
+            if (uploadPhotoType == 0) { // 原图
+                if (specialInspectionFlag != null && specialInspectionFlag == 1) { // 特检
+                    templateId = photoSpecifications.getPhotoDetectionProcessSpecialInspectionOriginalId();
+                } else { // 非特检
+                    templateId = photoSpecifications.getPhotoDetectionProcessOriginalId();
+                }
+            } else if (uploadPhotoType == 1) { // 已处理图
+                if (specialInspectionFlag != null && specialInspectionFlag == 1) { // 特检
+                    templateId = photoSpecifications.getPhotoDetectionProcessSpecialInspectionProcessingId();
+                } else { // 非特检
+                    templateId = photoSpecifications.getPhotoDetectionProcessProcessingId();
+                }
+            }
+        }
+        // 第三方流程
+        if (templateId == null) {
+            templateId = photoSpecifications.getPhotoDetectionProcessThirdPartyId();
+        }
+        if (templateId == null) {
+            sPhotoInfoService.deleteById(photoInfoEntity.getId());
+            return R.error("规格没有设置对应的流程，请联系管理员设置");
+        }
+
+        // 流程
+        int processType = 1;
+        // 标志 0不合格 1合格 -1默认第一个开始点
+        if (sign == null) {
+            sign = -1;
+        }
+        // 流程id
+        Integer detectionProcessId = null;
+        // 流程操作
+        Integer operate;
+        TbPhotoDetectionProcessEntity photoDetectionProcessEntity = null;
+        String logShowsOne = null;
+        if (sign == -1) {
+            photoDetectionProcessEntity = getPhotoDetectionProcess(templateId, sign);
+            logShowsOne = "上传照片";
+        } else {
+            List<TbManualOperationRecordEntity> manualOperationRecords = manualOperationRecordService.selectList(
+                    new QueryWrapper<TbManualOperationRecordEntity>()
+                            .eq("order_id", orderId)
+                            .orderByDesc("id")
+                            .last("limit 0, 1")
+            );
+            if (manualOperationRecords != null && !manualOperationRecords.isEmpty()) {
+                TbManualOperationRecordEntity manualOperationRecordEntity = manualOperationRecords.get(0);
+                int parentId = manualOperationRecordEntity.getPhotoDetectionProcessId();
+                List<TbPhotoDetectionProcessEntity> photoDetectionProcesses = photoDetectionProcessService.selectList(
+                        new QueryWrapper<TbPhotoDetectionProcessEntity>()
+                                .eq("parent_id", parentId)
+                                .eq("sign", sign)
+                                .eq("status", 1)
+                );
+                if (photoDetectionProcesses != null && !photoDetectionProcesses.isEmpty()) {
+                    photoDetectionProcessEntity = photoDetectionProcesses.get(0);
+                }
+                // 检测状态（被操作软件），0默认值、1机检、2自动处理、3人检、4人调、5肖像、6第三方
+                if (manualOperationRecordEntity.getCheckStatus() == 1) {
+                    logShowsOne = "机检";
+                } else if (manualOperationRecordEntity.getCheckStatus() == 2) {
+                    logShowsOne = "自动处理";
+                } else if (manualOperationRecordEntity.getCheckStatus() == 3) {
+                    logShowsOne = "人检";
+                } else if (manualOperationRecordEntity.getCheckStatus() == 4) {
+                    logShowsOne = "人调";
+                } else if (manualOperationRecordEntity.getCheckStatus() == 5) {
+                    logShowsOne = "肖像";
+                } else if (manualOperationRecordEntity.getCheckStatus() == 6) {
+                    logShowsOne = "第三方";
+                }
+            }
+        }
+        if (photoDetectionProcessEntity != null && photoDetectionProcessEntity.getOperate() == 6) {
+            templateId = photoSpecifications.getPhotoDetectionProcessThirdPartyId();
+            if (templateId == null) {
+                sPhotoInfoService.deleteById(photoInfoEntity.getId());
+                return R.error("规格没有设置对应的流程，请联系管理员设置");
+            }
+            photoDetectionProcessEntity = getPhotoDetectionProcess(templateId, -1);
+        }
+        if (photoDetectionProcessEntity == null && sign == -1) {
+            if (templateId == null) {
+                sPhotoInfoService.deleteById(photoInfoEntity.getId());
+            }
+            return R.error("规格没有设置对应的流程，请联系管理员设置");
+        } else if (photoDetectionProcessEntity == null) {
+            operate = 0;
+        } else {
+            detectionProcessId = photoDetectionProcessEntity.getId();
+            operate = photoDetectionProcessEntity.getOperate();
+        }
+
+        // 是否要初检 0否 1是
+        int initialInspectionFlag = 0;
+        try {
+            if (photoDetectionProcessEntity != null) {
+                String initialInspectionType = photoDetectionProcessEntity.getInitialInspectionType();
+                Integer initialInspection = photoInfoEntity.getInitialInspection();
+                List<String> initialInspectionTypeList = new ArrayList<>();
+                if (StringUtils.isNotBlank(initialInspectionType)) {
+                    JSONArray array = new JSONArray(initialInspectionType);
+                    if (array != null && array.length() > 0) {
+                        for (int i = 0; i < array.length(); i++) {
+                            initialInspectionTypeList.add(array.optString(i));
+                        }
+                    }
+                }
+
+                if ((initialInspection == null || (initialInspection != null && initialInspection == 2))
+                        && initialInspectionTypeList != null && !initialInspectionTypeList.isEmpty()
+                        && initialInspectionTypeList.contains(acquisitionSoftware)) {
+                    initialInspectionFlag = 1;
+                }
+            }
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+        /***************** 获取流程 结束 *******************/
+        // 保存检测结果
+        TbDetectionResultEntity detectionParams = new TbDetectionResultEntity();
+        detectionParams.setOrderId(orderId);
+        detectionParams.setSpecificationId(photoSpecifications.getId());
+        if (operate.toString().startsWith("6000")) { // 第三方 像素检测合格
+            detectionParams.setReceipt(orderId);
+            detectionParams.setType(0);
+            detectionParams.setFlag(1);
+        } else {
+            detectionParams.setReceipt(orderId); // 非第三方 像素检测中
+            detectionParams.setType(0);
+            detectionParams.setFlag(2);
+        }
+        this.updateDetectionResult(detectionParams);
+
+        if (processFlag) {
+            operate = 0;
+            sign = -1;
+        }
+        String queue = null;
+        PhotoInfoDetectionBean bean = new PhotoInfoDetectionBean();
+        if (operate == 0) { // 结束
+            log.info("[{}]已经完成，即将[结束]流程，照片检测号：{}", logShowsOne, orderId);
+            detectionParams.setReceipt(orderId);
+            detectionParams.setType(0);
+            if (sign == -1 || sign == 1) {
+                detectionParams.setFlag(1);
+                photoInfoEntity.setFlag(1);
+
+                if (StringUtils.isNotBlank(processImagePath)) {
+                    photoInfoEntity.setPhotoAdj(processImagePath);
+                } else {
+                    // 异步保存图片
+                    String imagePath = saveAdjPhoto(image, specificationId, photoSpecifications.getPhotoSign());
+                    photoInfoEntity.setPhotoAdj(imagePath);
+                }
+
+            } else {
+                detectionParams.setFlag(sign);
+                detectionParams.setDetail(detail);
+                photoInfoEntity.setFlag(sign == 0 ? 3 : 1);
+                photoInfoEntity.setQcDetail(detail);
+            }
+            photoInfoEntity.setThirdpartyEndtime(new Date());
+
+            if (photoSpecifications.getIsCreateTemplate() == 1 && detectionParams.getFlag() == 1) {
+                queue = "pixel.web.people.crd";
+                bean.setPhotoId(photoId);
+                bean.setOrderId(orderId);
+                bean.setImage(image);
+                bean.setCrd3RName(crd3rName);
+                bean.setCrd4RName(crd4rName);
+                bean.setFlag(1);
+                bean.setQcDetail("检测合格");
+                bean.setQRcodeDwonloadUrl(photoInfoEntity.getReceiptPdfUrl());
+            }
+
+            if (StringUtils.isNotBlank(photoInfoEntity.getAcquisitionSoftware())
+                    && "PHOTO_BOOTH".equals(photoInfoEntity.getAcquisitionSoftware())) {
+                if (photoInfoEntity.getFlag() == 1) {
+                    photoInfoEntity.setInitialInspection(1);
+                } else if (photoInfoEntity.getFlag() == 3) {
+                    photoInfoEntity.setInitialInspection(0);
+                }
+            }
+
+            // 保存结果
+            sPhotoInfoService.updateById(photoInfoEntity);
+            this.updateDetectionResult(detectionParams);
+            redisUtils.delete("order:" + orderId);
+
+        } else if (operate == 1) { // 自动处理
+            log.info("[{}]已经完成，即将进行[自动处理]流程，照片检测号：{}", logShowsOne, orderId);
+            queue = "pixel.web.machine.detection.complex";
+            bean.setOrderId(orderId);
+            bean.setImage(image);
+            bean.setFltData(fltData);
+            bean.setFltDataId(fltdataId);
+            bean.setProcessingFlow(0);
+            bean.setFaceLiveCheck(faceLiveCheck);
+            bean.setCleanBgFlag(cleanBgFlag);
+            bean.setDetectionProcessId(detectionProcessId);
+            bean.setProcessType(processType);
+            bean.setUserType(userType);
+            if ("DESKTOP".equals(acquisitionSoftware)) {
+                bean.setSdkVerNumber(0);
+                if ("07a002".equals(fltName)) {
+                    bean.setSdkVerNumber(1);
+                }
+            }
+
+            // 照片处理
+            photoInfoEntity.setAuBegtime(now);
+            photoInfoEntity.setFlagPc(7);
+
+            setManualOperationRecord(orderId, 2, 0, "system", detectionProcessId);
+
+            // 保存结果
+            sPhotoInfoService.updateById(photoInfoEntity);
+            boolean isOk = mqSender.send(queue, bean);
+            if (!isOk) {
+//                return R.error("发送mq失败！queue=" + queue);
+            }
+
+        } else if (operate == 2) { // 机检
+            log.info("[{}]已经完成，即将进行[机检]流程，照片检测号：{}", logShowsOne, orderId);
+            queue = "pixel.web.machine.detection.complex";
+            bean.setOrderId(orderId);
+            bean.setImage(image);
+            bean.setFltData(fltData);
+            bean.setFltDataId(fltdataId);
+            bean.setProcessingFlow(1);
+            bean.setFaceLiveCheck(faceLiveCheck);
+            bean.setCleanBgFlag(cleanBgFlag);
+            bean.setDetectionProcessId(detectionProcessId);
+            bean.setProcessType(processType);
+            bean.setUserType(userType);
+            if ("DESKTOP".equals(acquisitionSoftware)) {
+                bean.setSdkVerNumber(0);
+                if ("07a002".equals(fltName)) {
+                    bean.setSdkVerNumber(1);
+                }
+            }
+
+            // 照片处理
+            photoInfoEntity.setAcTime(now);
+            photoInfoEntity.setFlagPc(1);
+            photoInfoEntity.setPhotoAdj(photoInfoEntity.getPhoto());
+
+            setManualOperationRecord(orderId, 1, 0, "system", detectionProcessId);
+
+            // 保存结果
+            sPhotoInfoService.updateById(photoInfoEntity);
+            boolean isOk = mqSender.send(queue, bean);
+            if (!isOk) {
+                return R.error("发送mq失败！queue=" + queue);
+            }
+
+        } else if (operate == 3) { // 人检
+            QueueBean queueBean = this.getQueue(specificationId, QueueTypeEnum.QUEUE_QC);
+            queue = queueBean.getQueue();
+
+            initFlag(image, orderId, specificationId, sign, photoInfoEntity, photoSpecifications, logShowsOne, queue, queueBean);
+
+            bean.setOrderId(orderId);
+            bean.setImage(image);
+            bean.setOriginalImage(image);
+            bean.setFltData(fltData);
+            bean.setFltDataId(fltdataId);
+            bean.setSpecialFlag(specialInspectionFlag);
+            bean.setSpecialDetail(sppecialInspectionDetai);
+            bean.setFltName(fltName);
+            bean.setPeopleDetectionDatasource(0);
+            bean.setCleanBgFlag(cleanBgFlag);
+            bean.setDetectionProcessId(detectionProcessId);
+            bean.setProcessType(processType);
+            bean.setUserType(userType);
+            bean.setSdkVerNumber(isSdkVerNumber(fltName));
+            if (StringUtils.isBlank(fltName) && "07a002".equals(fltName)) {
+                bean.setSdkVerNumber(1);
+            }
+
+            // 照片处理
+            photoInfoEntity.setQcBegtime(now);
+            photoInfoEntity.setFlagPc(3);
+//            photoInfoEntity.setPhotoAdj(photoInfoEntity.getPhoto());
+
+            setManualOperationRecord(orderId, 3, 3, "System MQ", detectionProcessId);
+
+            // 保存结果
+            sPhotoInfoService.updateById(photoInfoEntity);
+            boolean isOk = mqSender.send(queue, bean);
+            if (!isOk) {
+                return R.error("发送mq失败！queue=" + queue);
+            }
+
+        } else if (operate == 4) { // 人调
+            QueueBean queueBean = this.getQueue(specificationId, QueueTypeEnum.QUEUE_QA);
+            queue = queueBean.getQueue();
+
+            // 判断人调是否在线
+            int qaCount = tbInspectorMapper.selectCount(
+                    new QueryWrapper<TbInspectorEntity>()
+                            .eq("qa_queue_id", queueBean.getQueueId())
+                            .eq("qa_online", 1)
+            );
+            log.info("[{}]已经完成，即将进行[人调]流程，在线检测人员数量[{}]人，检测队列[{}]，照片检测号：[{}]", logShowsOne, qaCount, queue, orderId);
+            if (qaCount < 1) { // 没有检测员，按初检合格直接返回结果
+                Map<String, Object> orderDetailsMap = redisUtils.hgetAll("order:" + photoInfoEntity.getOrderId());
+                if (orderDetailsMap != null && orderDetailsMap.size() > 0) {
+                    try {
+                        String imagePath = this.saveAdjPhoto(image, specificationId, photoSpecifications.getPhotoSign());
+                        photoInfoEntity.setPhotoAdj(imagePath);
+                        photoInfoEntity.setInitialInspection(sign);
+                        orderDetailsMap.put("initialInspection", sign);
+                        orderDetailsMap.put("photoAdj", imagePath);
+
+                        redisUtils.hsetAll("order:" + photoInfoEntity.getOrderId(), orderDetailsMap, REDIS_DETETE_ORDER_EXPIRE);
+                    } catch (Exception e) {
+                        log.error("[人调] 人调不在线，初检错误，msg={}", e.getMessage());
+                        e.printStackTrace();
+                    }
+                }
+            }
+
+            bean.setImage(image);
+            bean.setOrderId(orderId);
+            bean.setOriginalImage(image);
+            bean.setFltData(fltData);
+            bean.setFltDataId(fltdataId);
+            bean.setCfd(cfd);
+            bean.setSpecialFlag(photoInfoEntity.getSpecialInspectionFlag());
+            bean.setSpecialDetail(photoInfoEntity.getSpecialInspectionDetail());
+            bean.setFltName(fltName);
+            bean.setCleanBgFlag(cleanBgFlag);
+            bean.setDetectionProcessId(detectionProcessId);
+            bean.setProcessType(processType);
+            bean.setUserType(userType);
+            bean.setSdkVerNumber(isSdkVerNumber(fltName));
+            bean.setInitialInspectionFlag(initialInspectionFlag);
+            if ("07a002".equals(fltName)) {
+                bean.setSdkVerNumber(1);
+            }
+
+            bean.setInfoName(infoName);
+            bean.setCensus(census);
+            bean.setCertificateSite(certificateSite);
+            bean.setCardType(cardTypeName);
+            bean.setIdCard(idCard);
+            bean.setAcquisitionSoftware(acquisitionSoftware);
+            bean.setUpTime(upTime);
+            bean.setUploadUserName(uploadUserName);
+            bean.setUsername(user.getUsername());
+            bean.setSpecificationNameAbbreviation(photoSpecifications.getSpecificationNameAbbreviation());
+            bean.setSpecificationNameType(specificationTypeName);
+
+            // 照片处理
+            photoInfoEntity.setPaBegtime(now);
+            photoInfoEntity.setFlagPc(5);
+            photoInfoEntity.setPhotoAdj(photoInfoEntity.getPhoto());
+
+            setManualOperationRecord(orderId, 4, 3, "System MQ", detectionProcessId);
+
+            // 保存结果
+            sPhotoInfoService.updateById(photoInfoEntity);
+            boolean isOk = mqSender.send(queue, bean);
+            if (!isOk) {
+                return R.error("发送mq失败！queue=" + queue);
+            }
+
+        } else if (operate == 5) { // 深度褪第
+            queue = "pixel.web.machine.detection.complex";
+
+        } else if (operate == 60001) { // 第三方一所
+            log.info("[{}]已经完成，即将进行[第三方-一所]流程，照片检测号：{}", logShowsOne, orderId);
+            queue = "pixel.thirdParty.photoInfo";
+            bean.setPhotoId(photoId);
+            bean.setNotype(specificationType);
+            bean.setIdno(idCard);
+            bean.setDatasource(userType);
+            bean.setDeviceid(companyId);
+            bean.setPhoto(image);
+            bean.setCapturedate(upTime);
+            bean.setPhototypeid(specificationType);
+            bean.setChecktype(specificationType);
+            bean.setSpecialFlag(specialInspectionFlag);
+            bean.setCheckreason(sppecialInspectionDetai);
+            bean.setUserId(userId);
+            bean.setPhotoUrl(photoUrl);
+
+            setManualOperationRecord(orderId, 6, 0, "ThirdParty", detectionProcessId);
+
+            detectionParams.setReceipt(null);
+            detectionParams.setType(3);
+            detectionParams.setFlag(2);
+
+            // 保存结果
+            sPhotoInfoService.updateById(photoInfoEntity);
+            this.updateDetectionResult(detectionParams);
+            boolean isOk = mqSender.send(queue, bean);
+            if (!isOk) {
+                return R.error("发送mq失败！queue=" + queue);
+            }
+
+        } else if (operate == 60002) { // 第三方因公
+            log.info("[{}]已经完成，即将进行[第三方-因公]流程，照片检测号：{}", logShowsOne, orderId);
+            queue = "pixel.mrtdephoto.queue";
+            bean.setFltDataId(fltdataId);
+            bean.setImage(image);
+            bean.setOrderId(orderId);
+            bean.setUserType(userType);
+
+            setManualOperationRecord(orderId, 6, 0, "ThirdPartyYingGong", detectionProcessId);
+
+            detectionParams.setReceipt(null);
+            detectionParams.setType(2);
+            detectionParams.setFlag(2);
+
+            // 保存结果
+            sPhotoInfoService.updateById(photoInfoEntity);
+            this.updateDetectionResult(detectionParams);
+            boolean isOk = mqSender.send(queue, bean);
+            if (!isOk) {
+                return R.error("发送mq失败！queue=" + queue);
+            }
+
+
+        } else if (operate == 60003) { // 第三方省级
+            log.info("[{}]已经完成，即将进行[第三方-省级平台]流程，照片检测号：{}", logShowsOne, orderId);
+            if (thirdPartyDestination == null) {
+                if (templateId == null) {
+                    sPhotoInfoService.deleteById(photoInfoEntity.getId());
+                }
+                return R.error("第三方省级未设置第三方去向，请联系管理员添加");
+            }
+            photoInfoEntity.setPixelFlag(1);
+            if (StringUtils.isBlank(photoInfoEntity.getPhotoAdj())) {
+                photoInfoEntity.setPhotoAdj(photoInfoEntity.getPhoto());
+            }
+
+            QueueBean queueBean = this.getQueue(specificationId, QueueTypeEnum.QUEUE_THIRTY_PARTY);
+            queue = queueBean.getQueue();
+            // 江苏
+//            if (thirdPartyDestination == 1) {
+//                log.info("[{}]已经完成，即将进行[第三方-省级平台-江苏]流程，照片检测号：{}", logShowsOne, orderId);
+//
+//                byte[] bytes = Base64.getDecoder().decode(image);
+//                int size = bytes.length;
+//
+//                if (StringUtils.isNotBlank(conversionFlt)) {
+//                    fltName = conversionFlt;
+//                    bean.setIsConfirm(1);
+//                }
+//                if (StringUtils.isNotBlank(idCard)) {
+//                    try {
+//                        Map<String, Object> encryptData = new HashMap<>();
+//                        encryptData.put("idCard", idCard);
+//                        JSONObject encryptJson = ThirdPartyEncryptDataBean.buildToJSON(queueBean, encryptData, 1);
+//
+//                        R backR = commonThirdPartyService.encryptIdCard(encryptJson.toString());
+//                        if ("200".equals(backR.get("code").toString())) {
+//                            Map<String, Object> dataMap = (Map<String, Object>) backR.get("data");
+//                            idCard = dataMap.get("idCard") != null ? dataMap.get("idCard").toString() : null;
+//                        } else {
+//                            return R.error(backR.get("msg") != null ? backR.get("msg").toString() : null);
+//                        }
+//                    } catch (Exception e) {
+//                        e.printStackTrace();
+//                    }
+//
+//                }
+//
+//                bean.setIdentityId(orderId);
+//                bean.setUpTime(DateUtils.format(photoInfoEntity.getUpTime(), "yyyy-MM-dd HH:mm:ss"));
+//                bean.setPhoto(image);
+//                bean.setFilename(orderId);
+//                bean.setFiletime(DateUtils.format(photoInfoEntity.getUpTime(), "yyyy-MM-dd HH:mm:ss"));
+//                bean.setFilesize(size);
+//                bean.setFlagSp(specialInspectionFlag);
+//                bean.setSpInfo(sppecialInspectionDetai);
+//                bean.setFlagQ(0);
+//                bean.setFlagLock(0);
+//                bean.setFltName(fltName);
+//                bean.setFlagLevel(0);
+//                bean.setFlagMode(0);
+//                bean.setFlag(0);
+//                bean.setName(photoInfoEntity.getInfoName());
+//                bean.setIdCard(idCard);
+//                bean.setDetectionProcessId(detectionProcessId);
+//                bean.setReceiptNumber(orderId);
+//                bean.setUserId(photoInfoEntity.getUserId());
+//                bean.setUsername(user.getUsername());
+//                bean.setMobile(user.getMobile());
+//                bean.setFltFileName(fileName);
+//                bean.setUploadSign(uploadSign);
+//
+//                if ("07a002".equals(fltName)) { // 江苏二代证
+//
+//                    setManualOperationRecord(orderId, 6, 0, "ThirdParty_JiangSu", detectionProcessId);
+//
+//                    detectionParams.setReceipt(null);
+//                    detectionParams.setType(1);
+//                    detectionParams.setFlag(2);
+//
+//                    // 保存结果
+//                    sPhotoInfoService.updateById(photoInfoEntity);
+//                    this.updateDetectionResult(detectionParams);
+//                    boolean isOk = mqSender.send(queue, bean);
+//                    if (!isOk) {
+//                        return R.error("发送mq失败！queue=" + queue);
+//                    }
+//
+//
+//                } else {
+//                    setManualOperationRecord(orderId, 6, 1, "ThirdParty_JiangSu", detectionProcessId);
+//
+//                    photoInfoEntity.setFlag(1);
+//                    photoInfoEntity.setThirdpartyEndtime(new Date());
+//                    photoInfoEntity.setQcDetail("检测合格");
+//
+//                    // 保存结果
+//                    sPhotoInfoService.updateById(photoInfoEntity);
+//                    boolean isOk = mqSender.send(queue, bean);
+//                    if (!isOk) {
+//                        return R.error("发送mq失败！queue=" + queue);
+//                    }
+//
+//                    // 回调
+//                    DetectionFlowDto detectionFlowDto = new DetectionFlowDto();
+//                    detectionFlowDto.setImage(image);
+//                    detectionFlowDto.setOrderId(photoInfoEntity.getOrderId());
+//                    detectionFlowDto.setSpecificationId(photoSpecifications.getId());
+//                    detectionFlowDto.setTemplateId(templateId);
+//                    detectionFlowDto.setSign(sign);
+//                    detectionFlowDto.setDetail(detail);
+//                    this.switchingProcess(detectionFlowDto);
+//                }
+//            } else if (thirdPartyDestination == 2) { // 陕西
+            log.info("[{}]已经完成，即将进行[第三方-省级平台]流程，照片检测号：{}", logShowsOne, orderId);
+            byte[] bytes = Base64.getDecoder().decode(image);
+            int size = bytes.length;
+
+            if (StringUtils.isNotBlank(conversionFlt)) {
+                fltName = conversionFlt;
+            }
+
+            if (StringUtils.isNotBlank(idCard) || StringUtils.isNotBlank(infoName)) {
+                try {
+                    Map<String, Object> encryptData = new HashMap<>();
+                    encryptData.put("idCard", idCard);
+                    encryptData.put("infoName", infoName);
+                    JSONObject encryptJson = ThirdPartyEncryptDataBean.buildToJSON(queueBean, encryptData);
+
+                    R backR = commonThirdPartyService.encryptIdCard(encryptJson.toString());
+                    if ("200".equals(backR.get("code").toString())) {
+                        Map<String, Object> dataMap = (Map<String, Object>) backR.get("data");
+                        idCard = dataMap.get("idCard") != null ? dataMap.get("idCard").toString() : null;
+                        infoName = dataMap.get("infoName") != null ? dataMap.get("infoName").toString() : null;
+
+                    } else {
+                        return R.error(backR.get("msg") != null ? backR.get("msg").toString() : null);
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+
+            }
+
+            List<TbManualOperationRecordEntity> manualOperationRecords = manualOperationRecordService.selectList(
+                    new QueryWrapper<TbManualOperationRecordEntity>()
+                            .eq("order_id", orderId)
+                            .orderByAsc("id")
+            );
+            JSONArray detectTimeArray = new JSONArray();
+            if (!CollectionUtils.isEmpty(manualOperationRecords)) {
+                for (TbManualOperationRecordEntity entity : manualOperationRecords) {
+                    int recordId = entity.getId();
+                    Date startTime = entity.getCreateTime();
+                    Date endTime = entity.getEndTime();
+                    Integer checkStatus = entity.getCheckStatus();
+                    String operatorName = entity.getOperatorName();
+                    Integer recordFlag = entity.getFlag();
+                    try {
+                        JSONObject detectTimejson = new JSONObject();
+                        detectTimejson.put("id", recordId);
+                        detectTimejson.put("startTime", startTime != null ? DateUtils.format(startTime, "yyyy-MM-dd HH:mm:ss") : null);
+                        detectTimejson.put("endTime", startTime != null ? DateUtils.format(endTime, "yyyy-MM-dd HH:mm:ss") : null);
+                        detectTimejson.put("checkStatus", checkStatus);
+                        detectTimejson.put("operatorName", operatorName);
+                        detectTimejson.put("recordFlag", recordFlag);
+                        detectTimeArray.put(detectTimejson);
+                    } catch (JSONException e) {
+                        e.printStackTrace();
+                    }
+
+                }
+            }
+
+            bean.setIdentityId(orderId);
+            bean.setUpTime(DateUtils.format(photoInfoEntity.getUpTime(), "yyyy-MM-dd HH:mm:ss"));
+            bean.setPhoto(image);
+            bean.setFilename(orderId);
+            bean.setFiletime(DateUtils.format(photoInfoEntity.getUpTime(), "yyyy-MM-dd HH:mm:ss"));
+            bean.setFilesize(size);
+            bean.setFlagSp(specialInspectionFlag);
+            bean.setSpInfo(sppecialInspectionDetai);
+            bean.setFlagQ(0);
+            bean.setFlagLock(0);
+            bean.setFltName(fltName);
+            bean.setFlagLevel(0);
+            bean.setFlagMode(0);
+            bean.setFlag(0);
+            bean.setName(infoName);
+            bean.setIdCard(idCard);
+            bean.setDetectionProcessId(detectionProcessId);
+            bean.setReceiptNumber(orderId);
+            bean.setUserId(photoInfoEntity.getUserId());
+            bean.setUsername(user.getUsername());
+            bean.setMobile(user.getMobile());
+            bean.setFltFileName(fileName);
+            bean.setUploadSign(uploadSign);
+            bean.setCensusProvince(censusProvince);
+            bean.setCensusCity(censusCity);
+            bean.setCensusArea(censusArea);
+            bean.setMobile(mobile);
+            bean.setCertificateType(certificateType);
+            bean.setDetectTimeList(detectTimeArray.toString());
+
+            setManualOperationRecord(orderId, 6, 1, "ThirdParty", detectionProcessId);
+
+
+            photoInfoEntity.setFlag(1);
+            photoInfoEntity.setThirdpartyEndtime(new Date());
+            photoInfoEntity.setQcDetail("检测合格");
+
+            // 保存结果
+            sPhotoInfoService.updateById(photoInfoEntity);
+
+            if ("07a002".equals(fltName)) { // 需要送进内网
+                boolean isOk = mqSender.send(queue, bean);
+                if (!isOk) {
+                    return R.error("发送mq失败！queue=" + queue);
+                }
+            }
+
+            // 回调
+            DetectionFlowDto detectionFlowDto = new DetectionFlowDto();
+            detectionFlowDto.setImage(image);
+            detectionFlowDto.setOrderId(photoInfoEntity.getOrderId());
+            detectionFlowDto.setSpecificationId(photoSpecifications.getId());
+            detectionFlowDto.setTemplateId(templateId);
+            detectionFlowDto.setSign(sign);
+            detectionFlowDto.setDetail(detail);
+            this.switchingProcess(detectionFlowDto);
+//            }
+        } else if (operate == 8) { // 趣味背景
+            log.info("[{}]已经完成，即将进行[趣味背景]流程，照片检测号：{}", logShowsOne, orderId);
+            queue = "pixel.createFunBackground";
+            bean.setOrderId(orderId);
+            bean.setImage(image);
+            bean.setDetectionProcessId(detectionProcessId);
+
+            setManualOperationRecord(orderId, 5, 0, "ThirdParty", detectionProcessId);
+
+            // 保存结果
+            sPhotoInfoService.updateById(photoInfoEntity);
+            boolean isOk = mqSender.send(queue, bean);
+            if (!isOk) {
+                return R.error("发送mq失败！queue=" + queue);
+            }
+
+
+        } else if (operate == 9) { // 中考SDK检测
+            log.info("[{}]已经完成，即将进行[中考SDK检测]流程，照片检测号：{}", logShowsOne, orderId);
+            queue = "pixel.web.machine.check.detectsdk_3.1.4";
+            bean.setOrderId(orderId);
+            bean.setImage(image);
+            bean.setFltData(fltData);
+            bean.setFltDataId(fltdataId);
+            bean.setProcessingFlow(1);
+
+            setManualOperationRecord(orderId, 7, 0, "ThirdParty", detectionProcessId);
+
+            // 保存结果
+            sPhotoInfoService.updateById(photoInfoEntity);
+            boolean isOk = mqSender.send(queue, bean);
+            if (!isOk) {
+                return R.error("发送mq失败！queue=" + queue);
+            }
+
+
+        }
+//        if (StringUtils.isNotBlank(queue)) {
+//            boolean isOk = mqSender.send(queue, bean);
+//            if (!isOk) {
+//                return R.error("发送mq失败！queue=" + queue);
+//            }
+//        }
+//        if (photoInfoEntity.getId() != null) {
+//            sPhotoInfoService.updateById(photoInfoEntity);
+//        }
+        return R.ok();
+    }
